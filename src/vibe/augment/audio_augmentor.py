@@ -180,6 +180,11 @@ class AudioAugmentor:
         Args:
             musan_path: Path to MUSAN dataset
         """
+        if not os.path.exists(musan_path):
+            raise FileNotFoundError(
+                'Please download MUSAN from `https://www.openslr.org/17`, '
+                'and run command `tar zxvf musan.tar.gz`'
+            )
         noise_path = os.path.join(musan_path, 'noise')
         if os.path.exists(noise_path):
             _, noise_wavs = fast_scandir(noise_path, extensions=['.wav'], recursive=True)
@@ -202,6 +207,11 @@ class AudioAugmentor:
         Args:
             rir_path: Path to RIR dataset
         """
+        if not os.path.exists(rir_path):
+            raise FileNotFoundError(
+                'Please download MUSAN from `https://www.openslr.org/28`, '
+                'and run command `unzip rirs_noises.zip`'
+            )
         _, self.rirs = fast_scandir(
             rir_path, extensions=['.wav'], recursive=True
         )
