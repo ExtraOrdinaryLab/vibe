@@ -1,0 +1,217 @@
+# ===============================================================================
+# ECAPA-TDNN Configuration for Speaker Verification
+# ===============================================================================
+# This configuration file defines the parameters for training an ECAPA-TDNN
+# (Emphasized Channel Attention, Propagation and Aggregation in Time Delay Neural Network)
+# model for speaker verification tasks.
+
+# ===============================================================================
+# Input and Output Paths
+# ===============================================================================
+# Input files
+train_manifest:             # Path to training data manifest in JSONL format
+validation_manifest:        # Path to validation data manifest in JSONL format
+noise_scp:                  # Path to noise data for augmentation
+reverb_scp:                 # Path to reverberation data for augmentation
+
+# Output directory
+exp_dir:                    # Base directory for experiment outputs (logs, models)
+
+# ===============================================================================
+# Basic Training Parameters
+# ===============================================================================
+num_epochs: 70              # Total number of training epochs
+save_epoch_freq: 10         # Save checkpoint every N epochs
+log_batch_freq: 100         # Log training statistics every N batches
+
+# Audio processing parameters
+chunkify: True              # Whether to segment audio into chunks
+chunk_length: 3.0           # Duration (seconds) for each training sample
+sample_rate: 16000          # Audio sample rate in Hz
+aug_prob: 0.8               # Probability of applying augmentation
+speed_pertub: False         # Whether to apply speed perturbation
+
+# Optimization parameters
+lr: 0.2                     # Learning rate
+min_lr: !!float 5e-5        # Minimum learning rate for scheduler
+
+# ===============================================================================
+# DataLoader Configuration
+# ===============================================================================
+total_batch_size: 256       # Total batch size for training
+num_workers: 16             # Number of worker processes for data loading
+
+# ===============================================================================
+# Model Configuration
+# ===============================================================================
+fbank_dim: 80               # Dimension of filterbank features
+embedding_size: 192         # Size of speaker embedding
+num_classes:                # Number of speaker classes (will be set dynamically)
+
+# ===============================================================================
+# Audio Processing Pipeline Components
+# ===============================================================================
+# Component for loading and processing audio waveforms
+waveform_reader:
+  obj: vibe.dataset.processor.WaveformReader
+  args:
+    duration: <chunk_length>
+    sample_rate: <sample_rate>
+    speed_pertub: <speed_pertub>
+
+# Component for encoding speaker labels
+label_encoder:
+  obj: vibe.dataset.processor.SpeakerLabelEncoder
+  args:
+    data_file: <train_manifest>
+
+# Component for extracting filterbank features
+feature_extractor:
+  obj: vibe.dataset.processor.FBank
+  args:
+    num_mel_bins: <fbank_dim>
+    sample_rate: <sample_rate>
+    normalize: True
+
+# Component for applying audio augmentations
+augmentations:
+  obj: vibe.dataset.processor.SpeakerVerificationAugmentation
+  args:
+    aug_prob: <aug_prob>
+    noise_file: <noise_scp>
+    reverb_file: <reverb_scp>
+
+# Full preprocessing pipeline
+preprocessor:
+  waveform_reader: <waveform_reader>
+  label_encoder: <label_encoder>
+  augmentations: <augmentations>
+  feature_extractor: <feature_extractor>
+
+validation_preprocessor:
+  waveform_reader: <waveform_reader>
+  label_encoder: <label_encoder>
+  feature_extractor: <feature_extractor>
+
+# ===============================================================================
+# Training Process Components
+# ===============================================================================
+# Epoch counter for tracking training progress
+epoch_counter:
+  obj: vibe.utils.epoch.EpochCounter
+  args:
+    limit: <num_epochs>
+
+# Dataset configuration
+train_dataset:
+  obj: vibe.dataset.JsonlAudioDataset
+  args:
+    jsonl_file: <train_manifest>
+    preprocessor: <preprocessor>
+    chunkify: <chunkify>
+    chunk_length: <chunk_length>
+    chunk_overlap: 0
+
+validation_dataset:
+  obj: vibe.dataset.JsonlAudioDataset
+  args:
+    jsonl_file: <validation_manifest>
+    preprocessor: <validation_preprocessor>
+    chunkify: <chunkify>
+    chunk_length: <chunk_length>
+    chunk_overlap: 0
+
+# DataLoader configuration
+train_dataloader:
+  obj: torch.utils.data.DataLoader
+  args:
+    dataset: <train_dataset>
+    batch_size:             # Will be set based on total_batch_size
+    num_workers: <num_workers>
+    pin_memory: True
+    drop_last: True
+
+validation_dataloader:
+  obj: torch.utils.data.DataLoader
+  args:
+    dataset: <validation_dataset>
+    batch_size:             # Will be set based on total_batch_size
+    num_workers: <num_workers>
+    pin_memory: True
+    drop_last: True
+
+# ===============================================================================
+# Neural Network Architecture
+# ===============================================================================
+# ECAPA-TDNN embedding model
+embedding_model:
+  obj: vibe.models.ecapa_tdnn.ECAPA_TDNN
+  args:
+    input_size: <fbank_dim>
+    lin_neurons: <embedding_size>
+    channels: [1024, 1024, 1024, 1024, 3072]  # Channel dimensions for ECAPA-TDNN blocks
+                                              # Alternative: [512, 512, 512, 512, 1536]
+
+# Classification layer
+classifier:
+  obj: vibe.models.ecapa_tdnn.CosineClassifier
+  args:
+    input_dim: <embedding_size>
+    out_neurons:            # Will be set to num_classes
+
+# ===============================================================================
+# Optimization and Loss Function
+# ===============================================================================
+# Optimizer configuration
+optimizer:
+  obj: torch.optim.AdamW
+  args:
+    params:                 # Will be populated with model parameters
+    lr: <lr>
+    betas: [0.9, 0.999]
+    weight_decay: !!float 2e-5
+
+# Learning rate scheduler
+lr_scheduler:
+  obj: vibe.schedulers.lr_scheduler.CyclicLRScheduler
+  args:
+    optimizer: <optimizer>
+    base_lr: <min_lr>
+    max_lr: <lr>
+    fix_epoch: <num_epochs>
+    mode: triangular2
+    num_cycles: 4
+    step_per_epoch:         # Will be set based on dataset size
+
+# Loss function
+loss:
+  obj: vibe.losses.margin_loss.ArcMarginLoss
+  args:
+    scale: 30.0             # Scale factor for angular margins
+    margin: 0.2             # Margin penalty for same-class samples
+    easy_margin: False      # Whether to use the easy margin formula
+
+# Margin scheduler to gradually increase margin during training
+margin_scheduler:
+  obj: vibe.schedulers.margin_scheduler.MarginScheduler
+  args:
+    criterion: <loss>
+    initial_margin: 0.0     # Starting margin value
+    final_margin: 0.2       # Final margin value
+    increase_start_epoch: 20  # Epoch to start increasing margin
+    fix_epoch: 50           # Epoch when margin reaches final value
+    step_per_epoch:         # Will be set based on dataset size
+
+# ===============================================================================
+# Checkpoint Management
+# ===============================================================================
+checkpointer:
+  obj: vibe.utils.checkpoint.Checkpointer
+  args:
+    checkpoints_dir: <exp_dir>/models  # Directory to save model checkpoints
+    recoverables:           # Components to save in checkpoints
+      embedding_model: <embedding_model>
+      classifier: <classifier>
+      epoch_counter: <epoch_counter>
+      lr_scheduler: <lr_scheduler>
+      margin_scheduler: <margin_scheduler>
