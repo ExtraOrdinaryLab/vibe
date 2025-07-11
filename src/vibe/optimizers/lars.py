@@ -1,6 +1,7 @@
+from typing import Optional, Iterable, Callable
+
 import torch
 from torch.optim.optimizer import Optimizer, required
-from typing import Dict, List, Optional, Tuple, Union, Iterable, Callable
 
 
 class LARS(Optimizer):

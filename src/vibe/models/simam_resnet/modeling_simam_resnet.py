@@ -1,21 +1,9 @@
 import math
-from typing import Optional, Tuple, Dict, Union
-
-from rich.console import Console
+from typing import List
 
 import torch
-import torch.utils.checkpoint
 from torch import nn
 from torch.nn import functional as F
-from transformers.modeling_utils import PreTrainedModel
-from torchaudio.transforms import SpecAugment
-from huggingface_hub import PyTorchModelHubMixin
-from transformers.modeling_outputs import ModelOutput
-
-from ...logging import get_logger
-from .configuration_simam_resnet import SimAMResNetConfig
-    
-logger = get_logger()
 
 
 class InputNormalization(torch.nn.Module):
@@ -725,392 +713,45 @@ class AttentiveStatisticsPooling(nn.Module):
         return pooled_stats
 
 
-class Linear(torch.nn.Module):
-    """Computes a linear transformation y = wx + b.
-
-    Arguments
-    ---------
-    n_neurons : int
-        It is the number of output neurons (i.e, the dimensionality of the
-        output).
-    input_shape : tuple
-        It is the shape of the input tensor.
-    input_size : int
-        Size of the input tensor.
-    bias : bool
-        If True, the additive bias b is adopted.
-    max_norm : float
-        weight max-norm.
-    combine_dims : bool
-        If True and the input is 4D, combine 3rd and 4th dimensions of input.
-
-    Example
-    -------
-    >>> inputs = torch.rand(10, 50, 40)
-    >>> lin_t = Linear(input_shape=(10, 50, 40), n_neurons=100)
-    >>> output = lin_t(inputs)
-    >>> output.shape
-    torch.Size([10, 50, 100])
-    """
+class SimAMResNet(nn.Module):
 
     def __init__(
-        self,
-        n_neurons,
-        input_shape=None,
-        input_size=None,
-        bias=True,
-        max_norm=None,
-        combine_dims=False,
+        self, 
+        num_mel_bins: int = 80,
+        in_planes: int = 64,
+        emb_sizes: int = 192, 
+        num_blocks: List[int] = [3, 4, 6, 3], 
     ):
         super().__init__()
-        self.max_norm = max_norm
-        self.combine_dims = combine_dims
-
-        if input_shape is None and input_size is None:
-            raise ValueError("Expected one of input_shape or input_size")
-
-        if input_size is None:
-            input_size = input_shape[-1]
-            if len(input_shape) == 4 and self.combine_dims:
-                input_size = input_shape[2] * input_shape[3]
-
-        # Weights are initialized following pytorch approach
-        self.w = nn.Linear(input_size, n_neurons, bias=bias)
-
-    def forward(self, x):
-        """Returns the linear transformation of input tensor.
-
-        Arguments
-        ---------
-        x : torch.Tensor
-            Input to transform linearly.
-
-        Returns
-        -------
-        wx : torch.Tensor
-            The linearly transformed outputs.
-        """
-        if x.ndim == 4 and self.combine_dims:
-            x = x.reshape(x.shape[0], x.shape[1], x.shape[2] * x.shape[3])
-
-        if self.max_norm is not None:
-            self.w.weight.data = torch.renorm(
-                self.w.weight.data, p=2, dim=0, maxnorm=self.max_norm
-            )
-
-        wx = self.w(x)
-
-        return wx
-
-
-class Classifier(torch.nn.Module):
-    """This class implements the cosine similarity on the top of features.
-
-    Arguments
-    ---------
-    input_size : int
-        Expected size of input dimension.
-    device : str
-        Device used, e.g., "cpu" or "cuda".
-    lin_blocks : int
-        Number of linear layers.
-    lin_neurons : int
-        Number of neurons in linear layers.
-    out_neurons : int
-        Number of classes.
-
-    Example
-    -------
-    >>> classify = Classifier(input_size=2, lin_neurons=2, out_neurons=2)
-    >>> outputs = torch.tensor([ [1., -1.], [-9., 1.], [0.9, 0.1], [0.1, 0.9] ])
-    >>> outputs = outputs.unsqueeze(1)
-    >>> cos = classify(outputs)
-    >>> (cos < -1.0).long().sum()
-    tensor(0)
-    >>> (cos > 1.0).long().sum()
-    tensor(0)
-    """
-
-    def __init__(
-        self,
-        input_size,
-        device="cpu",
-        lin_blocks=0,
-        lin_neurons=192,
-        out_neurons=1211,
-    ):
-        super().__init__()
-        self.blocks = nn.ModuleList()
-
-        for block_index in range(lin_blocks):
-            self.blocks.extend(
-                [
-                    _BatchNorm1d(input_size=input_size),
-                    Linear(input_size=input_size, n_neurons=lin_neurons),
-                ]
-            )
-            input_size = lin_neurons
-
-        # Final Layer
-        self.weight = nn.Parameter(
-            torch.FloatTensor(out_neurons, input_size, device=device)
-        )
-        nn.init.xavier_uniform_(self.weight)
-
-    def forward(self, x):
-        """Returns the output probabilities over speakers.
-
-        Arguments
-        ---------
-        x : torch.Tensor
-            Torch tensor.
-
-        Returns
-        -------
-        out : torch.Tensor
-            Output probabilities over speakers.
-        """
-        for layer in self.blocks:
-            x = layer(x)
-
-        # Need to be normalized
-        x = F.linear(F.normalize(x.squeeze(1)), F.normalize(self.weight))
-        return x.unsqueeze(1)
-
-
-class AngularMargin(nn.Module):
-    """
-    An implementation of Angular Margin (AM) proposed in the following
-    paper: '''Margin Matters: Towards More Discriminative Deep Neural Network
-    Embeddings for Speaker Recognition''' (https://arxiv.org/abs/1906.07317)
-
-    Arguments
-    ---------
-    margin : float
-        The margin for cosine similarity
-    scale : float
-        The scale for cosine similarity
-
-    Example
-    -------
-    >>> pred = AngularMargin()
-    >>> outputs = torch.tensor([ [1., -1.], [-1., 1.], [0.9, 0.1], [0.1, 0.9] ])
-    >>> targets = torch.tensor([ [1., 0.], [0., 1.], [ 1., 0.], [0.,  1.] ])
-    >>> predictions = pred(outputs, targets)
-    >>> predictions[:,0] > predictions[:,1]
-    tensor([ True, False,  True, False])
-    """
-
-    def __init__(self, margin=0.0, scale=1.0):
-        super().__init__()
-        self.margin = margin
-        self.scale = scale
-
-    def forward(self, outputs, targets):
-        """Compute AM between two tensors
-
-        Arguments
-        ---------
-        outputs : torch.Tensor
-            The outputs of shape [N, C], cosine similarity is required.
-        targets : torch.Tensor
-            The targets of shape [N, C], where the margin is applied for.
-
-        Returns
-        -------
-        predictions : torch.Tensor
-        """
-        outputs = outputs - self.margin * targets
-        return self.scale * outputs
-
-
-class AdditiveAngularMargin(AngularMargin):
-    """
-    An implementation of Additive Angular Margin (AAM) proposed
-    in the following paper: '''Margin Matters: Towards More Discriminative Deep
-    Neural Network Embeddings for Speaker Recognition'''
-    (https://arxiv.org/abs/1906.07317)
-
-    Arguments
-    ---------
-    margin : float
-        The margin for cosine similarity.
-    scale : float
-        The scale for cosine similarity.
-    easy_margin : bool
-
-    Example
-    -------
-    >>> outputs = torch.tensor([ [1., -1.], [-1., 1.], [0.9, 0.1], [0.1, 0.9] ])
-    >>> targets = torch.tensor([ [1., 0.], [0., 1.], [ 1., 0.], [0.,  1.] ])
-    >>> pred = AdditiveAngularMargin()
-    >>> predictions = pred(outputs, targets)
-    >>> predictions[:,0] > predictions[:,1]
-    tensor([ True, False,  True, False])
-    """
-
-    def __init__(self, margin=0.0, scale=1.0, easy_margin=False):
-        super().__init__(margin, scale)
-        self.easy_margin = easy_margin
-
-        self.cos_m = math.cos(self.margin)
-        self.sin_m = math.sin(self.margin)
-        self.th = math.cos(math.pi - self.margin)
-        self.mm = math.sin(math.pi - self.margin) * self.margin
-
-    def forward(self, outputs, targets):
-        """
-        Compute AAM between two tensors
-
-        Arguments
-        ---------
-        outputs : torch.Tensor
-            The outputs of shape [N, C], cosine similarity is required.
-        targets : torch.Tensor
-            The targets of shape [N, C], where the margin is applied for.
-
-        Returns
-        -------
-        predictions : torch.Tensor
-        """
-        cosine = outputs.float()
-        cosine = torch.clamp(cosine, -1 + 1e-7, 1 - 1e-7)
-        sine = torch.sqrt(1.0 - torch.pow(cosine, 2))
-        phi = cosine * self.cos_m - sine * self.sin_m  # cos(theta + m)
-        if self.easy_margin:
-            phi = torch.where(cosine > 0, phi, cosine)
-        else:
-            phi = torch.where(cosine > self.th, phi, cosine - self.mm)
-        outputs = (targets * phi) + ((1.0 - targets) * cosine)
-        return self.scale * outputs
-
-
-class LogSoftmaxWrapper(nn.Module):
-    """
-    Arguments
-    ---------
-    loss_fn : Callable
-        The LogSoftmax function to wrap.
-
-    Example
-    -------
-    >>> outputs = torch.tensor([ [1., -1.], [-1., 1.], [0.9, 0.1], [0.1, 0.9] ])
-    >>> outputs = outputs.unsqueeze(1)
-    >>> targets = torch.tensor([ [0], [1], [0], [1] ])
-    >>> log_prob = LogSoftmaxWrapper(nn.Identity())
-    >>> loss = log_prob(outputs, targets)
-    >>> 0 <= loss < 1
-    tensor(True)
-    >>> log_prob = LogSoftmaxWrapper(AngularMargin(margin=0.2, scale=32))
-    >>> loss = log_prob(outputs, targets)
-    >>> 0 <= loss < 1
-    tensor(True)
-    >>> outputs = torch.tensor([ [1., -1.], [-1., 1.], [0.9, 0.1], [0.1, 0.9] ])
-    >>> log_prob = LogSoftmaxWrapper(AdditiveAngularMargin(margin=0.3, scale=32))
-    >>> loss = log_prob(outputs, targets)
-    >>> 0 <= loss < 1
-    tensor(True)
-    """
-
-    def __init__(self, loss_fn):
-        super().__init__()
-        self.loss_fn = loss_fn
-        self.criterion = torch.nn.KLDivLoss(reduction="sum")
-
-    def forward(self, outputs, targets, length=None):
-        """
-        Arguments
-        ---------
-        outputs : torch.Tensor
-            Network output tensor, of shape
-            [batch, 1, outdim].
-        targets : torch.Tensor
-            Target tensor, of shape [batch, 1].
-        length : torch.Tensor
-            The lengths of the corresponding inputs.
-
-        Returns
-        -------
-        loss: torch.Tensor
-            Loss for current examples.
-        """
-        outputs = outputs.squeeze(1)
-        targets = targets.squeeze(1)
-        targets = F.one_hot(targets.long(), outputs.shape[1]).float()
-        try:
-            predictions = self.loss_fn(outputs, targets)
-        except TypeError:
-            predictions = self.loss_fn(outputs)
-
-        predictions = F.log_softmax(predictions, dim=1)
-        loss = self.criterion(predictions, targets) / targets.sum()
-        return loss
-
-
-class SimAMResNetForSpeakerClassification(nn.Module, PyTorchModelHubMixin):
-
-    def __init__(self, config: SimAMResNetConfig):
-        super().__init__()
-        self.config = config
-        self.num_classes = config.num_labels
-        self.mean_var_norm = InputNormalization(std_norm=False)
-        self.encoder = ResNet(config.in_planes, SimAMBasicBlock, config.num_blocks)
-        outmap_size = int(config.num_mel_bins / 8)
-        self.out_dim = config.in_planes * 8 * outmap_size
+        self.encoder = ResNet(in_planes, SimAMBasicBlock, num_blocks)
+        outmap_size = int(num_mel_bins / 8)
+        self.out_dim = in_planes * 8 * outmap_size
         self.asp = AttentiveStatisticsPooling(channels=self.out_dim)
         self.asp_bn = BatchNorm1d(input_size=self.out_dim * 2)
         self.fc = Conv1d(
             in_channels=self.out_dim * 2,
-            out_channels=config.emb_sizes,
+            out_channels=emb_sizes,
             kernel_size=1,
         )
-        self.classifier = Classifier(
-            input_size=config.emb_sizes, 
-            lin_blocks=0, 
-            lin_neurons=config.emb_sizes, 
-            out_neurons=self.num_classes
-        )
-        self.loss_fn = LogSoftmaxWrapper(
-            AdditiveAngularMargin(config.margin, config.scale)
-        )
-
-    def forward(
-        self,
-        input_features: Optional[torch.Tensor],
-        attention_mask: Optional[torch.Tensor] = None,
-        labels: Optional[torch.Tensor] = None,
-    ):
-        B, C, T = input_features.shape
-        # Input tensor should be (B, T, C) for InputNormalization
-        input_features = self.mean_var_norm(
-            input_features.transpose(1, 2), torch.ones(B).to(input_features.device)
-        )
-        if self.training:
-            spec_augment = SpecAugment(
-                n_time_masks=self.config.num_time_masks, 
-                time_mask_param=self.config.time_mask_width, 
-                n_freq_masks=self.config.num_freq_masks, 
-                freq_mask_param=self.config.freq_mask_width, 
-                zero_masking=True
-            )
-            # Input tensor should be (B, C, T) for SpecAugment
-            input_features = spec_augment(input_features.transpose(1, 2))
-            input_features = input_features.transpose(1, 2)
+    
+    def forward(self, x: torch.Tensor, lengths: torch.Tensor = None):
+        """Extract speaker embeddings from input features.
+        
+        Args:
+            x: Input tensor of shape (batch, time, channel)
+            lengths: Optional tensor of sequence lengths for masked processing
+            
+        Returns:
+            Speaker embedding vectors
+        """
+        B, T, C = x.shape
+        x = x.transpose(1, 2)
         # Input tensor should be (B, 1, C, T) for SimAMResNet
-        encodings = self.encoder(input_features.transpose(1, 2).unsqueeze(dim=1))
-        encodings = encodings.contiguous().view(B, self.out_dim, -1)
-        encodings = self.asp(encodings)
-        encodings = self.asp_bn(encodings)
-        embeddings = self.fc(encodings)
-        embeddings = embeddings.transpose(1, 2)
-        logits = self.classifier(embeddings)
-
-        loss = None
-        if labels is not None:
-            loss = self.loss_fn(logits.view(B, 1, self.num_classes), labels.view(-1, 1))
-
-        return ModelOutput(
-            loss=loss,
-            logits=logits.view(B, self.num_classes),
-            embeddings=embeddings.view(B, self.config.emb_sizes)
-        )
+        x = self.encoder(x.unsqueeze(dim=1))
+        x = x.contiguous().view(B, self.out_dim, -1)
+        x = self.asp(x)
+        x = self.asp_bn(x)
+        x = self.fc(x)
+        x = x.transpose(1, 2)
+        x = x.squeeze(1)
+        return x

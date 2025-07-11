@@ -1,72 +1,18 @@
 import math
-from typing import List, Optional, Tuple, Union
+from typing import Optional, Tuple, Union
 
 import numpy as np
-from rich.console import Console
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.checkpoint as ckpt
-from torchaudio.transforms import SpecAugment
-from huggingface_hub import PyTorchModelHubMixin
-from transformers.modeling_outputs import ModelOutput
-
-from ...logging import get_logger
-from .configuration_conformer import ConformerConfig
-from .feature_extractor_conformer import ConformerFeatureExtractor
-
-logger = get_logger()
 
 WENET_NORM_CLASSES = {
     'layer_norm': nn.LayerNorm,
     'batch_norm': nn.BatchNorm1d,
     'rms_norm': nn.RMSNorm
 }
-
-
-class InputNormalization(torch.nn.Module):
-    """Performs sentence-level mean and variance normalization of the input tensor."""
-
-    def __init__(self, mean_norm=True, std_norm=True, eps=1e-10):
-        super().__init__()
-        self.mean_norm = mean_norm
-        self.std_norm = std_norm
-        self.eps = eps
-
-    def forward(self, x: torch.Tensor, lengths: torch.Tensor):
-        """Apply sentence-level normalization.
-
-        Arguments
-        ---------
-        x : torch.Tensor
-            A batch of input tensors with shape [batch, time, feat_dim].
-        lengths : torch.Tensor
-            A tensor containing the relative length of each sentence.
-
-        Returns
-        -------
-        x : torch.Tensor
-            The normalized tensor.
-        """
-        N_batches = x.shape[0]
-        out = torch.empty_like(x)
-
-        for snt_id in range(N_batches):
-            actual_size = torch.round(lengths[snt_id] * x.shape[1]).int()
-            x_snt = x[snt_id, 0:actual_size]
-
-            mean, std = self._compute_current_stats(x_snt)
-            out[snt_id] = (x[snt_id] - mean) / std
-
-        return out
-
-    def _compute_current_stats(self, x):
-        """Compute mean and std for a single sentence."""
-        mean = torch.mean(x, dim=0) if self.mean_norm else torch.tensor([0.0], device=x.device)
-        std = torch.std(x, dim=0) if self.std_norm else torch.tensor([1.0], device=x.device)
-        std = torch.max(std, self.eps * torch.ones_like(std))  # numerical stability
-        return mean.detach(), std.detach()
 
 
 def get_padding_elem(L_in: int, stride: int, kernel_size: int, dilation: int):
@@ -3553,435 +3499,128 @@ class AttentiveStatisticsPooling(nn.Module):
         return pooled_stats
 
 
-class Linear(torch.nn.Module):
-    """Computes a linear transformation y = wx + b.
-
-    Arguments
-    ---------
-    n_neurons : int
-        It is the number of output neurons (i.e, the dimensionality of the
-        output).
-    input_shape : tuple
-        It is the shape of the input tensor.
-    input_size : int
-        Size of the input tensor.
-    bias : bool
-        If True, the additive bias b is adopted.
-    max_norm : float
-        weight max-norm.
-    combine_dims : bool
-        If True and the input is 4D, combine 3rd and 4th dimensions of input.
-
-    Example
-    -------
-    >>> inputs = torch.rand(10, 50, 40)
-    >>> lin_t = Linear(input_shape=(10, 50, 40), n_neurons=100)
-    >>> output = lin_t(inputs)
-    >>> output.shape
-    torch.Size([10, 50, 100])
-    """
+class Conformer(nn.Module):
 
     def __init__(
-        self,
-        n_neurons,
-        input_shape=None,
-        input_size=None,
-        bias=True,
-        max_norm=None,
-        combine_dims=False,
+        self, 
+        num_mel_bins: int = 80,
+        num_blocks: int = 6, 
+        output_hidden_size: int = 256, 
+        attention_heads: int = 4,
+        linear_units: int = 2048,
+        dropout_rate: float = 0.1,
+        positional_dropout_rate: float = 0.1,
+        attention_dropout_rate: float = 0.0,
+        input_layer: str = "conv2d",
+        pos_enc_layer_type: str = "rel_pos",
+        normalize_before: bool = True,
+        static_chunk_size: int = 0,
+        use_dynamic_chunk: bool = False,
+        use_dynamic_left_chunk: bool = False,
+        positionwise_conv_kernel_size: int = 1,
+        macaron_style: bool = True,
+        selfattention_layer_type: str = "rel_selfattn",
+        activation_type: str = "swish",
+        use_cnn_module: bool = True,
+        cnn_module_kernel: int = 15,
+        causal: bool = False,
+        cnn_module_norm: str = "batch_norm",
+        query_bias: bool = True,
+        key_bias: bool = True,
+        value_bias: bool = True,
+        conv_bias: bool = True,
+        gradient_checkpointing: bool = False,
+        use_sdpa: bool = False,
+        layer_norm_type: str = 'layer_norm',
+        norm_eps: float = 1e-5,
+        n_kv_head: Optional[int] = None,
+        head_dim: Optional[int] = None,
+        mlp_type: str = 'position_wise_feed_forward',
+        mlp_bias: bool = True,
+        n_expert: int = 8,
+        n_expert_activated: int = 2,
+        conv_norm_eps: float = 1e-5,
+        conv_inner_factor: int = 2,
+        final_norm: bool = True,
+        use_mfa: bool = True,  # Add MFA option
+        emb_sizes: int = 192, 
+        attention_channels: int = 128, 
     ):
         super().__init__()
-        self.max_norm = max_norm
-        self.combine_dims = combine_dims
-
-        if input_shape is None and input_size is None:
-            raise ValueError("Expected one of input_shape or input_size")
-
-        if input_size is None:
-            input_size = input_shape[-1]
-            if len(input_shape) == 4 and self.combine_dims:
-                input_size = input_shape[2] * input_shape[3]
-
-        # Weights are initialized following pytorch approach
-        self.w = nn.Linear(input_size, n_neurons, bias=bias)
-
-    def forward(self, x):
-        """Returns the linear transformation of input tensor.
-
-        Arguments
-        ---------
-        x : torch.Tensor
-            Input to transform linearly.
-
-        Returns
-        -------
-        wx : torch.Tensor
-            The linearly transformed outputs.
-        """
-        if x.ndim == 4 and self.combine_dims:
-            x = x.reshape(x.shape[0], x.shape[1], x.shape[2] * x.shape[3])
-
-        if self.max_norm is not None:
-            self.w.weight.data = torch.renorm(
-                self.w.weight.data, p=2, dim=0, maxnorm=self.max_norm
-            )
-
-        wx = self.w(x)
-
-        return wx
-
-
-class Classifier(torch.nn.Module):
-    """This class implements the cosine similarity on the top of features.
-
-    Arguments
-    ---------
-    input_size : int
-        Expected size of input dimension.
-    device : str
-        Device used, e.g., "cpu" or "cuda".
-    lin_blocks : int
-        Number of linear layers.
-    lin_neurons : int
-        Number of neurons in linear layers.
-    out_neurons : int
-        Number of classes.
-
-    Example
-    -------
-    >>> classify = Classifier(input_size=2, lin_neurons=2, out_neurons=2)
-    >>> outputs = torch.tensor([ [1., -1.], [-9., 1.], [0.9, 0.1], [0.1, 0.9] ])
-    >>> outputs = outputs.unsqueeze(1)
-    >>> cos = classify(outputs)
-    >>> (cos < -1.0).long().sum()
-    tensor(0)
-    >>> (cos > 1.0).long().sum()
-    tensor(0)
-    """
-
-    def __init__(
-        self,
-        input_size,
-        device="cpu",
-        lin_blocks=0,
-        lin_neurons=192,
-        out_neurons=1211,
-    ):
-        super().__init__()
-        self.blocks = nn.ModuleList()
-
-        for block_index in range(lin_blocks):
-            self.blocks.extend(
-                [
-                    _BatchNorm1d(input_size=input_size),
-                    Linear(input_size=input_size, n_neurons=lin_neurons),
-                ]
-            )
-            input_size = lin_neurons
-
-        # Final Layer
-        self.weight = nn.Parameter(
-            torch.FloatTensor(out_neurons, input_size, device=device)
-        )
-        nn.init.xavier_uniform_(self.weight)
-
-    def forward(self, x):
-        """Returns the output probabilities over speakers.
-
-        Arguments
-        ---------
-        x : torch.Tensor
-            Torch tensor.
-
-        Returns
-        -------
-        out : torch.Tensor
-            Output probabilities over speakers.
-        """
-        for layer in self.blocks:
-            x = layer(x)
-
-        # Need to be normalized
-        x = F.linear(F.normalize(x.squeeze(1)), F.normalize(self.weight))
-        return x.unsqueeze(1)
-
-
-class AngularMargin(nn.Module):
-    """
-    An implementation of Angular Margin (AM) proposed in the following
-    paper: '''Margin Matters: Towards More Discriminative Deep Neural Network
-    Embeddings for Speaker Recognition''' (https://arxiv.org/abs/1906.07317)
-
-    Arguments
-    ---------
-    margin : float
-        The margin for cosine similarity
-    scale : float
-        The scale for cosine similarity
-
-    Example
-    -------
-    >>> pred = AngularMargin()
-    >>> outputs = torch.tensor([ [1., -1.], [-1., 1.], [0.9, 0.1], [0.1, 0.9] ])
-    >>> targets = torch.tensor([ [1., 0.], [0., 1.], [ 1., 0.], [0.,  1.] ])
-    >>> predictions = pred(outputs, targets)
-    >>> predictions[:,0] > predictions[:,1]
-    tensor([ True, False,  True, False])
-    """
-
-    def __init__(self, margin=0.0, scale=1.0):
-        super().__init__()
-        self.margin = margin
-        self.scale = scale
-
-    def forward(self, outputs, targets):
-        """Compute AM between two tensors
-
-        Arguments
-        ---------
-        outputs : torch.Tensor
-            The outputs of shape [N, C], cosine similarity is required.
-        targets : torch.Tensor
-            The targets of shape [N, C], where the margin is applied for.
-
-        Returns
-        -------
-        predictions : torch.Tensor
-        """
-        outputs = outputs - self.margin * targets
-        return self.scale * outputs
-
-
-class AdditiveAngularMargin(AngularMargin):
-    """
-    An implementation of Additive Angular Margin (AAM) proposed
-    in the following paper: '''Margin Matters: Towards More Discriminative Deep
-    Neural Network Embeddings for Speaker Recognition'''
-    (https://arxiv.org/abs/1906.07317)
-
-    Arguments
-    ---------
-    margin : float
-        The margin for cosine similarity.
-    scale : float
-        The scale for cosine similarity.
-    easy_margin : bool
-
-    Example
-    -------
-    >>> outputs = torch.tensor([ [1., -1.], [-1., 1.], [0.9, 0.1], [0.1, 0.9] ])
-    >>> targets = torch.tensor([ [1., 0.], [0., 1.], [ 1., 0.], [0.,  1.] ])
-    >>> pred = AdditiveAngularMargin()
-    >>> predictions = pred(outputs, targets)
-    >>> predictions[:,0] > predictions[:,1]
-    tensor([ True, False,  True, False])
-    """
-
-    def __init__(self, margin=0.0, scale=1.0, easy_margin=False):
-        super().__init__(margin, scale)
-        self.easy_margin = easy_margin
-
-        self.cos_m = math.cos(self.margin)
-        self.sin_m = math.sin(self.margin)
-        self.th = math.cos(math.pi - self.margin)
-        self.mm = math.sin(math.pi - self.margin) * self.margin
-
-    def forward(self, outputs, targets):
-        """
-        Compute AAM between two tensors
-
-        Arguments
-        ---------
-        outputs : torch.Tensor
-            The outputs of shape [N, C], cosine similarity is required.
-        targets : torch.Tensor
-            The targets of shape [N, C], where the margin is applied for.
-
-        Returns
-        -------
-        predictions : torch.Tensor
-        """
-        cosine = outputs.float()
-        cosine = torch.clamp(cosine, -1 + 1e-7, 1 - 1e-7)
-        sine = torch.sqrt(1.0 - torch.pow(cosine, 2))
-        phi = cosine * self.cos_m - sine * self.sin_m  # cos(theta + m)
-        if self.easy_margin:
-            phi = torch.where(cosine > 0, phi, cosine)
-        else:
-            phi = torch.where(cosine > self.th, phi, cosine - self.mm)
-        outputs = (targets * phi) + ((1.0 - targets) * cosine)
-        return self.scale * outputs
-
-
-class LogSoftmaxWrapper(nn.Module):
-    """
-    Arguments
-    ---------
-    loss_fn : Callable
-        The LogSoftmax function to wrap.
-
-    Example
-    -------
-    >>> outputs = torch.tensor([ [1., -1.], [-1., 1.], [0.9, 0.1], [0.1, 0.9] ])
-    >>> outputs = outputs.unsqueeze(1)
-    >>> targets = torch.tensor([ [0], [1], [0], [1] ])
-    >>> log_prob = LogSoftmaxWrapper(nn.Identity())
-    >>> loss = log_prob(outputs, targets)
-    >>> 0 <= loss < 1
-    tensor(True)
-    >>> log_prob = LogSoftmaxWrapper(AngularMargin(margin=0.2, scale=32))
-    >>> loss = log_prob(outputs, targets)
-    >>> 0 <= loss < 1
-    tensor(True)
-    >>> outputs = torch.tensor([ [1., -1.], [-1., 1.], [0.9, 0.1], [0.1, 0.9] ])
-    >>> log_prob = LogSoftmaxWrapper(AdditiveAngularMargin(margin=0.3, scale=32))
-    >>> loss = log_prob(outputs, targets)
-    >>> 0 <= loss < 1
-    tensor(True)
-    """
-
-    def __init__(self, loss_fn):
-        super().__init__()
-        self.loss_fn = loss_fn
-        self.criterion = torch.nn.KLDivLoss(reduction="sum")
-
-    def forward(self, outputs, targets, length=None):
-        """
-        Arguments
-        ---------
-        outputs : torch.Tensor
-            Network output tensor, of shape
-            [batch, 1, outdim].
-        targets : torch.Tensor
-            Target tensor, of shape [batch, 1].
-        length : torch.Tensor
-            The lengths of the corresponding inputs.
-
-        Returns
-        -------
-        loss: torch.Tensor
-            Loss for current examples.
-        """
-        outputs = outputs.squeeze(1)
-        targets = targets.squeeze(1)
-        targets = F.one_hot(targets.long(), outputs.shape[1]).float()
-        try:
-            predictions = self.loss_fn(outputs, targets)
-        except TypeError:
-            predictions = self.loss_fn(outputs)
-
-        predictions = F.log_softmax(predictions, dim=1)
-        loss = self.criterion(predictions, targets) / targets.sum()
-        return loss
-
-
-# from wenet.transformer.encoder import ConformerEncoder
-
-
-class ConformerForSpeakerClassification(nn.Module, PyTorchModelHubMixin):
-
-    def __init__(self, config: ConformerConfig):
-        super().__init__()
-        self.config = config
-        self.mean_var_norm = InputNormalization(std_norm=False)
         self.conformer = ConformerEncoder(
-            input_size=config.num_mel_bins, 
-            output_size=config.output_hidden_size,
-            attention_heads=config.attention_heads,
-            linear_units=config.linear_units,
-            num_blocks=config.num_blocks,
-            dropout_rate=config.dropout_rate,
-            positional_dropout_rate=config.positional_dropout_rate,
-            attention_dropout_rate=config.attention_dropout_rate,
-            input_layer=config.input_layer,
-            pos_enc_layer_type=config.pos_enc_layer_type,
-            normalize_before=config.normalize_before,
-            static_chunk_size=config.static_chunk_size,
-            use_dynamic_chunk=config.use_dynamic_chunk,
-            use_dynamic_left_chunk=config.use_dynamic_left_chunk,
-            positionwise_conv_kernel_size=config.positionwise_conv_kernel_size,
-            macaron_style=config.macaron_style,
-            selfattention_layer_type=config.selfattention_layer_type,
-            activation_type=config.activation_type,
-            use_cnn_module=config.use_cnn_module,
-            cnn_module_kernel=config.cnn_module_kernel,
-            causal=config.causal,
-            cnn_module_norm=config.cnn_module_norm,
-            query_bias=config.query_bias,
-            key_bias=config.key_bias,
-            value_bias=config.value_bias,
-            conv_bias=config.conv_bias,
-            gradient_checkpointing=config.gradient_checkpointing,
-            use_sdpa=config.use_sdpa,
-            layer_norm_type=config.layer_norm_type,
-            norm_eps=config.norm_eps,
-            n_kv_head=config.n_kv_head,
-            head_dim=config.head_dim,
-            mlp_type=config.mlp_type,
-            mlp_bias=config.mlp_bias,
-            n_expert=config.n_expert,
-            n_expert_activated=config.n_expert_activated,
-            conv_norm_eps=config.conv_norm_eps,
-            conv_inner_factor=config.conv_inner_factor,
-            final_norm=config.final_norm
+            input_size=num_mel_bins, 
+            output_size=output_hidden_size,
+            attention_heads=attention_heads,
+            linear_units=linear_units,
+            num_blocks=num_blocks,
+            dropout_rate=dropout_rate,
+            positional_dropout_rate=positional_dropout_rate,
+            attention_dropout_rate=attention_dropout_rate,
+            input_layer=input_layer,
+            pos_enc_layer_type=pos_enc_layer_type,
+            normalize_before=normalize_before,
+            static_chunk_size=static_chunk_size,
+            use_dynamic_chunk=use_dynamic_chunk,
+            use_dynamic_left_chunk=use_dynamic_left_chunk,
+            positionwise_conv_kernel_size=positionwise_conv_kernel_size,
+            macaron_style=macaron_style,
+            selfattention_layer_type=selfattention_layer_type,
+            activation_type=activation_type,
+            use_cnn_module=use_cnn_module,
+            cnn_module_kernel=cnn_module_kernel,
+            causal=causal,
+            cnn_module_norm=cnn_module_norm,
+            query_bias=query_bias,
+            key_bias=key_bias,
+            value_bias=value_bias,
+            conv_bias=conv_bias,
+            gradient_checkpointing=gradient_checkpointing,
+            use_sdpa=use_sdpa,
+            layer_norm_type=layer_norm_type,
+            norm_eps=norm_eps,
+            n_kv_head=n_kv_head,
+            head_dim=head_dim,
+            mlp_type=mlp_type,
+            mlp_bias=mlp_bias,
+            n_expert=n_expert,
+            n_expert_activated=n_expert_activated,
+            conv_norm_eps=conv_norm_eps,
+            conv_inner_factor=conv_inner_factor,
+            final_norm=final_norm, 
+            use_mfa=use_mfa
         )
-        self.asp = AttentiveStatisticsPooling(config.output_hidden_size)
-        self.asp_bn = BatchNorm1d(input_size=config.output_hidden_size * 2)
+        self.asp = AttentiveStatisticsPooling(
+            output_hidden_size, 
+            attention_channels=attention_channels, 
+            global_context=True
+        )
+        self.asp_bn = BatchNorm1d(input_size=output_hidden_size * 2)
         # Final linear transformation
         self.fc = Conv1d(
-            in_channels=config.output_hidden_size * 2,
-            out_channels=config.emb_sizes,
+            in_channels=output_hidden_size * 2,
+            out_channels=emb_sizes,
             kernel_size=1,
         )
-        self.classifier = Classifier(
-            input_size=config.emb_sizes, 
-            lin_blocks=0, 
-            lin_neurons=config.emb_sizes, 
-            out_neurons=self.config.num_labels
-        )
-        self.loss_fn = LogSoftmaxWrapper(
-            AdditiveAngularMargin(config.margin, config.scale)
-        )
     
-    def forward(
-        self,
-        input_features: Optional[torch.Tensor],
-        attention_mask: Optional[torch.Tensor] = None,
-        labels: Optional[torch.Tensor] = None,
-    ):
-        B, C, T = input_features.shape
-        # Input tensor should be (B, T, C) for InputNormalization
-        input_features = self.mean_var_norm(
-            input_features.transpose(1, 2), torch.ones(B).to(input_features.device)
-        )
-        input_features = input_features.transpose(1, 2)
-        if self.training:
-            spec_augment = SpecAugment(
-                n_time_masks=self.config.num_time_masks, 
-                time_mask_param=self.config.time_mask_width, 
-                n_freq_masks=self.config.num_freq_masks, 
-                freq_mask_param=self.config.freq_mask_width, 
-                zero_masking=True
-            )
-            # Input tensor should be (B, C, T) for SpecAugment
-            input_features = spec_augment(input_features)
-        lens = torch.ones(B).to(input_features.device)
+    def forward(self, x: torch.Tensor, lengths: torch.Tensor = None):
+        """Extract speaker embeddings from input features.
+        
+        Args:
+            x: Input tensor of shape (batch, time, channel)
+            lengths: Optional tensor of sequence lengths for masked processing
+            
+        Returns:
+            Speaker embedding vectors
+        """
+        B, T, C = x.shape
+        lens = torch.ones(B).to(x.device)
         lens = torch.round(lens * T).int()
         # Input tensor should be (B, T, C) for Conformer
-        features, masks = self.conformer(input_features.transpose(1, 2), lens)
+        features, masks = self.conformer(x, lens)
         features = features.transpose(1, 2)
         features = self.asp(features)
         features = self.asp_bn(features)
         embeddings = self.fc(features)
         embeddings = embeddings.transpose(1, 2)
-        logits = self.classifier(embeddings)
-
-        loss = None
-        if labels is not None:
-            loss = self.loss_fn(logits.view(B, 1, self.config.num_labels), labels.view(-1, 1))
-
-        return ModelOutput(
-            loss=loss,
-            logits=logits.view(B, self.config.num_labels),
-            embeddings=embeddings.view(B, self.config.emb_sizes)
-        )
+        embeddings = embeddings.squeeze(1)
+        return x
