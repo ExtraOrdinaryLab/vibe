@@ -910,7 +910,7 @@ class TitaNetDecoder(nn.Module):
         self,
         encoder_output_size,
         attention_hidden_size: int = 128,
-        emb_sizes: int = 192,
+        embedding_size: int = 192,
         global_context: bool = True
     ):
         super().__init__()
@@ -925,7 +925,7 @@ class TitaNetDecoder(nn.Module):
         # Final linear transformation
         self.fc = Conv1d(
             in_channels=encoder_output_size * 2,
-            out_channels=emb_sizes,
+            out_channels=embedding_size,
             kernel_size=1,
         )
 
@@ -947,9 +947,9 @@ class TitaNet(nn.Module):
         num_sub_blocks: int = 3,
         encoder_hidden_size: int = 256, # 256, 512, 1024
         encoder_output_size: int = 1536,
-        emb_sizes: int = 192,
+        embedding_size: int = 192,
         mega_block_kernel_size: int = 3, # 3, 7, 11
-        prolog_kernel_size: int =3,
+        prolog_kernel_size: int = 3,
         epilog_kernel_size: int = 1,
         attention_hidden_size: int = 128,
         se_reduction: int = 16,
@@ -971,7 +971,7 @@ class TitaNet(nn.Module):
         self.decoder = TitaNetDecoder(
             encoder_output_size=encoder_output_size,
             attention_hidden_size=attention_hidden_size,
-            emb_sizes=emb_sizes,
+            embedding_size=embedding_size,
         )
 
     def forward(self, x: torch.Tensor, lengths=None):
