@@ -4,18 +4,18 @@ import argparse
 from tqdm import tqdm
 
 
-def create_cnceleb_trails(cnceleb_root, trial_path, extension='flac'):
+def create_cnceleb_trails(cnceleb1_root, trial_path, extension='wav'):
     """
     Create formatted trial file for CN-Celeb dataset evaluation.
     
     Args:
-        cnceleb_root: Root directory of CN-Celeb dataset
+        cnceleb1_root: Root directory of CN-Celeb dataset
         trial_path: Output path for the formatted trial file
         extension: Audio file extension (flac, wav, etc.)
     """
     # Path to enrollment list and trials list
-    enroll_lst_path = os.path.join(cnceleb_root, "eval/lists/enroll.lst")
-    raw_trl_path = os.path.join(cnceleb_root, "eval/lists/trials.lst")
+    enroll_lst_path = os.path.join(cnceleb1_root, "eval/lists/enroll.lst")
+    raw_trl_path = os.path.join(cnceleb1_root, "eval/lists/trials.lst")
 
     # Create speaker to audio file mapping
     spk2wav_mapping = {}
@@ -38,9 +38,11 @@ def create_cnceleb_trails(cnceleb_root, trial_path, extension='flac'):
     # Write formatted trial file with label and audio paths
     with open(trial_path, "w") as f:
         for item in tqdm(trials, desc='Handle trials'):
-            enroll_path = os.path.join(cnceleb_root, "eval", spk2wav_mapping[item[0]])
-            test_path = os.path.join(cnceleb_root, "eval", item[1])
+            enroll_path = os.path.join(cnceleb1_root, "eval", spk2wav_mapping[item[0]])
+            test_path = os.path.join(cnceleb1_root, "eval", item[1])
             test_path = os.path.splitext(test_path)[0] + '.{}'.format(extension)
+            enroll_path = enroll_path.replace('flac/', 'wav/')
+            test_path = test_path.replace('flac/', 'wav/')
             label = item[2]
             f.write("{} {} {}\n".format(label, enroll_path, test_path))
 
@@ -48,18 +50,18 @@ def create_cnceleb_trails(cnceleb_root, trial_path, extension='flac'):
 def main():
     # Parse command line arguments
     parser = argparse.ArgumentParser(description="Format CN-Celeb1 trial list for speaker verification")
-    parser.add_argument('--cnceleb_root', type=str, default='/home/jovyan/corpus/audio/cnceleb1/CN-Celeb_flac',
+    parser.add_argument('--cnceleb1_root', type=str, default='/home/jovyan/corpus/audio/cnceleb1/CN-Celeb_flac',
                         help='Root directory of CN-Celeb dataset')
     parser.add_argument('--trial_path', type=str, default='trials/cnceleb1_trial.txt',
                         help='Output path for the formatted trial list')
-    parser.add_argument('--extension', type=str, default='flac',
-                        help='Audio file extension (e.g., flac, wav)')
+    parser.add_argument('--extension', type=str, default='wav',
+                        help='Audio file extension (e.g., wav)')
     
     args = parser.parse_args()
     
     # Call the processing function with parsed arguments
     create_cnceleb_trails(
-        cnceleb_root=args.cnceleb_root, 
+        cnceleb1_root=args.cnceleb1_root, 
         trial_path=args.trial_path, 
         extension=args.extension
     )
