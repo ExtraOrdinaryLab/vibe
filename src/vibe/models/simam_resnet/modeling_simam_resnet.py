@@ -719,7 +719,7 @@ class SimAMResNet(nn.Module):
         self, 
         num_mel_bins: int = 80,
         in_planes: int = 64,
-        emb_sizes: int = 192, 
+        embedding_size: int = 192, 
         num_blocks: List[int] = [3, 4, 6, 3], 
     ):
         super().__init__()
@@ -730,7 +730,7 @@ class SimAMResNet(nn.Module):
         self.asp_bn = BatchNorm1d(input_size=self.out_dim * 2)
         self.fc = Conv1d(
             in_channels=self.out_dim * 2,
-            out_channels=emb_sizes,
+            out_channels=embedding_size,
             kernel_size=1,
         )
     
