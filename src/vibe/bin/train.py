@@ -79,6 +79,8 @@ def train(
     train_stats.add('accuracy@1', ':2.4f')
     train_stats.add('learning_rate', ':.8f')
     train_stats.add('margin', ':.3f')
+    train_stats.add('grad_norm', ':.4f')
+    train_stats.add('target_logit', ':.4f')  # Cosine similarity for correct class
     
     progress = ProgressMeter(
         len(train_loader),
@@ -105,9 +107,25 @@ def train(
         loss = criterion(output, y)
         acc1 = accuracy(output, y)
 
+        # Monitor logits statistics
+        # For margin-based losses, these represent cosine similarities
+        with torch.no_grad():
+            # Get cosine values for the correct classes only
+            batch_size = y.size(0)
+            correct_class_cos = output[torch.arange(batch_size), y].mean().item()
+
         # Backward pass and optimization
         optimizer.zero_grad()
         loss.backward()
+
+        # Calculate gradient norm
+        total_norm = 0.0
+        for p in model.parameters():
+            if p.grad is not None:
+                param_norm = p.grad.detach().data.norm(2)
+                total_norm += param_norm.item() ** 2
+        total_norm = total_norm ** 0.5
+
         optimizer.step()
 
         # Record training statistics
@@ -115,6 +133,8 @@ def train(
         train_stats.update('accuracy@1', acc1.item(), x.size(0))
         train_stats.update('learning_rate', optimizer.param_groups[0]["lr"])
         train_stats.update('margin', margin_scheduler.get_margin())
+        train_stats.update('grad_norm', total_norm)
+        train_stats.update('target_logit', correct_class_cos)
         train_stats.update('time', time.time() - end)
 
         # Log progress at specified frequency
@@ -127,7 +147,9 @@ def train(
     key_stats = {
         'train_loss': train_stats.avg('loss'),
         'train_acc': train_stats.avg('accuracy@1'),
-        'learning_rate': train_stats.val('learning_rate')
+        'learning_rate': train_stats.val('learning_rate'), 
+        'grad_norm': train_stats.avg('grad_norm'), 
+        'target_logit': train_stats.avg('target_logit')
     }
     return key_stats
 
