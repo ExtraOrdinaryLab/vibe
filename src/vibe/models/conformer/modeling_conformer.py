@@ -3543,7 +3543,7 @@ class Conformer(nn.Module):
         conv_inner_factor: int = 2,
         final_norm: bool = True,
         use_mfa: bool = True,  # Add MFA option
-        emb_sizes: int = 192, 
+        embedding_size: int = 192, 
         attention_channels: int = 128, 
     ):
         super().__init__()
@@ -3598,7 +3598,7 @@ class Conformer(nn.Module):
         # Final linear transformation
         self.fc = Conv1d(
             in_channels=output_hidden_size * 2,
-            out_channels=emb_sizes,
+            out_channels=embedding_size,
             kernel_size=1,
         )
     
