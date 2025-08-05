@@ -20,8 +20,8 @@ def parse_arguments():
     parser = argparse.ArgumentParser(description='Extract embeddings for evaluation.')
     parser.add_argument('--exp_dir', default='', type=str, 
                         help='Experiment directory containing model and configuration')
-    parser.add_argument('--audio_scp', default='', type=str, 
-                        help='Data directory containing audio files')
+    parser.add_argument('--audio_scp', default='', type=str, nargs='+',
+                        help='One or more data files containing audio paths. Multiple files can be specified.')
     parser.add_argument('--use_gpu', action='store_true', 
                         help='Use GPU for extraction if available')
     parser.add_argument('--gpu', nargs='+', default=None,
@@ -86,6 +86,28 @@ def setup_device(args, rank, logger):
     return device
 
 
+def load_multiple_wav_scp(audio_scp_files):
+    """Load audio data from multiple wav.scp files.
+    
+    Args:
+        audio_scp_files: List of paths to wav.scp files
+        
+    Returns:
+        Dictionary mapping utterance IDs to audio file paths
+    """
+    combined_data = {}
+    for scp_file in audio_scp_files:
+        data = load_wav_scp(scp_file)
+        # Check for duplicates
+        duplicates = set(combined_data.keys()) & set(data.keys())
+        if duplicates:
+            print(f"Warning: Found {len(duplicates)} duplicate keys in {scp_file}. Later files will override earlier ones.")
+        
+        combined_data.update(data)
+    
+    return combined_data
+
+
 def main():
     """Main function to extract speaker embeddings from audio files."""
     # Parse command line arguments
@@ -126,8 +148,8 @@ def main():
     # Initialize feature extractor
     feature_extractor = build('feature_extractor', config)
 
-    # Load audio data and distribute across workers
-    data = load_wav_scp(args.audio_scp)
+    # Load audio data from multiple files and distribute across workers
+    data = load_multiple_wav_scp(args.audio_scp)
     data_keys = list(data.keys())
     local_keys = data_keys[rank::world_size]
     
@@ -143,7 +165,7 @@ def main():
 
     # Log start of extraction (only on rank 0)
     if rank == 0:
-        logger.info('Start extracting embeddings.')
+        logger.info(f'Start extracting embeddings for {len(data_keys)} utterances from {len(args.audio_scp)} scp files.')
     
     # Extract embeddings using the model
     with torch.no_grad():
