@@ -104,7 +104,7 @@ def prepare_sitw(sitw_folder: str, output_folder: str) -> None:
                 files.add(utt_id)
                 
                 # Convert label (imp=imposter, tar=target) to binary (0/1)
-                label = 1 if parts[2].strip() == 'tar' else 0
+                label = 0 if parts[2].strip() == 'imp' else 1
                 
                 # Create full file paths
                 enroll_filepath = os.path.join(sitw_folder, 'eval', 'audio', enroll2utt[parts[0]])
