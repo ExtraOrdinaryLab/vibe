@@ -735,13 +735,13 @@ class PositionalEncoding(torch.nn.Module):
         # How to subscript a Union type:
         #   https://github.com/pytorch/pytorch/issues/69434
         if isinstance(offset, int):
-            assert offset + size <= self.max_len
+            assert offset + size <= self.max_len, f"Position encoding: offset={offset}, size={size}, max_len={self.max_len}"
             pos_emb = self.pe[:, offset:offset + size]
         elif isinstance(offset, torch.Tensor) and offset.dim() == 0:  # scalar
-            assert offset + size <= self.max_len
+            assert offset + size <= self.max_len, f"Position encoding: offset={offset}, size={size}, max_len={self.max_len}"
             pos_emb = self.pe[:, offset:offset + size]
         else:  # for batched streaming decoding on GPU
-            assert torch.max(offset) + size <= self.max_len
+            assert torch.max(offset) + size <= self.max_len, f"Position encoding: offset={offset}, size={size}, max_len={self.max_len}"
             index = offset.unsqueeze(1) + \
                 torch.arange(0, size).to(offset.device)  # B X T
             flag = index > 0
@@ -781,7 +781,7 @@ class RelPositionalEncoding(PositionalEncoding):
         x = x * self.xscale
         pos_emb = self.position_encoding(offset, x.size(1), False)
         return self.dropout(x), self.dropout(pos_emb)
-
+    
 
 class WhisperPositionalEncoding(PositionalEncoding):
     """ Sinusoids position encoding used in openai-whisper.encoder
