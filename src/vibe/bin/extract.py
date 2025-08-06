@@ -6,6 +6,7 @@ This script loads a trained model and processes audio files to generate speaker 
 import os
 import sys
 import argparse
+from typing import List
 
 import torch
 import torchaudio
@@ -20,7 +21,7 @@ def parse_arguments():
     parser = argparse.ArgumentParser(description='Extract embeddings for evaluation.')
     parser.add_argument('--exp_dir', default='', type=str, 
                         help='Experiment directory containing model and configuration')
-    parser.add_argument('--audio_scp', default='', type=str, nargs='+',
+    parser.add_argument('--audio_scp', default=None, nargs='+',
                         help='One or more data files containing audio paths. Multiple files can be specified.')
     parser.add_argument('--use_gpu', action='store_true', 
                         help='Use GPU for extraction if available')
@@ -86,7 +87,7 @@ def setup_device(args, rank, logger):
     return device
 
 
-def load_multiple_wav_scp(audio_scp_files):
+def load_multiple_wav_scp(audio_scp_files: List[str]):
     """Load audio data from multiple wav.scp files.
     
     Args:
