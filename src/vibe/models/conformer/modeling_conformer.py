@@ -2635,6 +2635,7 @@ class BaseEncoder(torch.nn.Module):
         num_blocks: int = 6,
         dropout_rate: float = 0.1,
         positional_dropout_rate: float = 0.1,
+        pos_emb_max_len: int = 3000, 
         attention_dropout_rate: float = 0.0,
         input_layer: str = "conv2d",
         pos_enc_layer_type: str = "abs_pos",
@@ -2693,10 +2694,10 @@ class BaseEncoder(torch.nn.Module):
         #    head_dim == hidden_size * attention_heads. refactor later
         self.embed = WENET_SUBSAMPLE_CLASSES[input_layer](
             input_size, output_size, dropout_rate,
-            pos_emb_class(output_size, positional_dropout_rate)
+            pos_emb_class(output_size, positional_dropout_rate, pos_emb_max_len)
             if pos_enc_layer_type != 'rope_pos' else pos_emb_class(
                 output_size, output_size //
-                attention_heads, positional_dropout_rate))
+                attention_heads, positional_dropout_rate, pos_emb_max_len))
 
         assert layer_norm_type in ['layer_norm', 'rms_norm']
         self.normalize_before = normalize_before
@@ -3237,6 +3238,7 @@ class ConformerEncoder(BaseEncoder):
         num_blocks: int = 6,
         dropout_rate: float = 0.1,
         positional_dropout_rate: float = 0.1,
+        pos_emb_max_len: int = 3000, 
         attention_dropout_rate: float = 0.0,
         input_layer: str = "conv2d",
         pos_enc_layer_type: str = "rel_pos",
@@ -3274,7 +3276,7 @@ class ConformerEncoder(BaseEncoder):
     ):
         super().__init__(input_size, output_size, attention_heads,
                          linear_units, num_blocks, dropout_rate,
-                         positional_dropout_rate, attention_dropout_rate,
+                         positional_dropout_rate, pos_emb_max_len, attention_dropout_rate,
                          input_layer, pos_enc_layer_type, normalize_before,
                          static_chunk_size, use_dynamic_chunk, global_cmvn,
                          use_dynamic_left_chunk, gradient_checkpointing,
@@ -3510,6 +3512,7 @@ class Conformer(nn.Module):
         linear_units: int = 2048,
         dropout_rate: float = 0.1,
         positional_dropout_rate: float = 0.1,
+        pos_emb_max_len: int = 3000, 
         attention_dropout_rate: float = 0.0,
         input_layer: str = "conv2d",
         pos_enc_layer_type: str = "rel_pos",
@@ -3555,6 +3558,7 @@ class Conformer(nn.Module):
             num_blocks=num_blocks,
             dropout_rate=dropout_rate,
             positional_dropout_rate=positional_dropout_rate,
+            pos_emb_max_len=pos_emb_max_len, 
             attention_dropout_rate=attention_dropout_rate,
             input_layer=input_layer,
             pos_enc_layer_type=pos_enc_layer_type,
@@ -3623,4 +3627,4 @@ class Conformer(nn.Module):
         embeddings = self.fc(features)
         embeddings = embeddings.transpose(1, 2)
         embeddings = embeddings.squeeze(1)
-        return x
+        return embeddings
