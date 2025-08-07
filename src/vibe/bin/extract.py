@@ -27,6 +27,8 @@ def parse_arguments():
                         help='Use GPU for extraction if available')
     parser.add_argument('--gpu', nargs='+', default=None,
                         help='Specific GPU IDs to use. If not provided, all available GPUs will be used.')
+    parser.add_argument('--max_frames', default=None, type=int, 
+                        help='Max number of frames.')
     
     return parser.parse_args(sys.argv[1:])
 
@@ -175,6 +177,7 @@ def main():
                 # Get audio file path and load it
                 wav_path = data[key]
                 wav, sample_rate = torchaudio.load(wav_path)
+                # wav = wav[:, :100*sample_rate]
                 
                 # Verify sample rate matches expected rate
                 assert sample_rate == config.sample_rate, (
@@ -184,6 +187,8 @@ def main():
                 
                 # Extract features and generate embedding
                 feat = feature_extractor(wav)
+                if args.max_frames is not None:
+                    feat = feat[:args.max_frames, :]
                 feat = feat.unsqueeze(0).to(device)
                 emb = embedding_model(feat).detach().cpu().numpy()
                 
