@@ -841,7 +841,7 @@ class RopePositionalEncoding(PositionalEncoding):
                  head_dim: int,
                  dropout_rate: float,
                  max_len: int = 3000,
-                 rope_theta=10000.0,
+                 rope_theta: float = 10000.0,
                  scale: bool = True):
         super().__init__(d_model, dropout_rate=dropout_rate, max_len=max_len)
         delattr(self, 'pe')
@@ -854,9 +854,7 @@ class RopePositionalEncoding(PositionalEncoding):
     def forward(
         self,
         x: torch.Tensor,
-        offset: Union[int,
-                      torch.Tensor] = 0) -> Tuple[torch.Tensor, torch.Tensor]:
-
+        offset: Union[int, torch.Tensor] = 0) -> Tuple[torch.Tensor, torch.Tensor]:
         pos_emb = self.position_encoding(offset, x.size(1), True)
         pos_emb = pos_emb.unsqueeze(2)  # [1,seq, 1, head_dim//2]
         # NOTE(Mddct): some model don't scale
@@ -871,12 +869,11 @@ class RopePositionalEncoding(PositionalEncoding):
 
         pe = torch.view_as_complex(self.pe)
         if isinstance(offset, int):
-            assert offset + size <= self.max_len
+            assert offset + size <= self.max_len, f"Position encoding: offset={offset}, size={size}, max_len={self.max_len}"
             pos_emb = pe[:, offset:offset + size]
         else:
-            assert torch.max(offset) + size <= self.max_len
-            index = offset.unsqueeze(1) + torch.arange(0, size).to(
-                offset.device)  # B X T
+            assert torch.max(offset) + size <= self.max_len, f"Position encoding: offset={offset}, size={size}, max_len={self.max_len}"
+            index = offset.unsqueeze(1) + torch.arange(0, size).to(offset.device)  # B X T
             flag = index > 0
             # remove negative offset
             index = index * flag
