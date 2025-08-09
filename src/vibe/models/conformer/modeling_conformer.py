@@ -3328,14 +3328,15 @@ class ConformerEncoder(BaseEncoder):
         self.use_mfa = use_mfa
         if use_mfa:
             # MFA TDNN layer - combine features from all layers
-            self.mfa = TDNNBlock(
-                output_size * (num_blocks),  # Concatenate all layer outputs
-                output_size,                 # Output same dimension as each layer
-                kernel_size=1,
-                dilation=1,
-                activation=nn.ReLU,
-                dropout=dropout_rate,
-            )
+            # self.mfa = TDNNBlock(
+            #     output_size * (num_blocks),  # Concatenate all layer outputs
+            #     output_size,                 # Output same dimension as each layer
+            #     kernel_size=1,
+            #     dilation=1,
+            #     activation=nn.ReLU,
+            #     dropout=dropout_rate,
+            # )
+            self.mfa = nn.Identity()
 
     def forward(
         self,
@@ -3591,7 +3592,7 @@ class Conformer(nn.Module):
             use_mfa=use_mfa
         )
         self.asp = AttentiveStatisticsPooling(
-            output_hidden_size, 
+            output_hidden_size * num_blocks if use_mfa else output_hidden_size, 
             attention_channels=attention_channels, 
             global_context=True
         )
