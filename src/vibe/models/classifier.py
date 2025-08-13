@@ -206,3 +206,78 @@ class LinearClassifier(nn.Module):
         # Final linear projection
         x = self.linear(x)
         return x
+
+
+class SubCenterCosineClassifier(nn.Module):
+    """
+    A classifier for Sub-center ArcFace.
+
+    It computes cosine similarity between features and K sub-center weights,
+    then returns the maximum cosine similarity for each class.
+    """
+    def __init__(
+        self,
+        input_dim,
+        out_neurons,
+        num_blocks=0,
+        inter_dim=512,
+        K=3
+    ):
+        """
+        Initialize a SubCenterCosineClassifier.
+
+        Args:
+            input_dim (int): Dimension of input features.
+            out_neurons (int): Number of output classes.
+            num_blocks (int): Number of DenseLayer blocks before classification.
+            inter_dim (int): Dimension of intermediate representations.
+            K (int): Number of sub-centers for each class.
+        """
+        super().__init__()
+        self.K = K
+        self.out_neurons = out_neurons
+        self.blocks = nn.ModuleList()
+
+        # Add intermediate dense blocks if specified
+        for _ in range(num_blocks):
+            self.blocks.append(DenseLayer(input_dim, inter_dim, config_str='batchnorm'))
+            input_dim = inter_dim
+
+        # Create trainable weights for K sub-centers per class
+        self.weight = nn.Parameter(
+            torch.FloatTensor(out_neurons * K, input_dim)
+        )
+        nn.init.xavier_uniform_(self.weight)
+
+    def forward(self, x):
+        """
+        Forward pass through the SubCenterCosineClassifier.
+
+        Args:
+            x: Input feature tensor of shape [B, dim]
+
+        Returns:
+            Tensor of shape [B, out_neurons] containing the maximum cosine
+            similarity to the sub-centers for each class.
+        """
+        # Pass through intermediate blocks
+        for layer in self.blocks:
+            x = layer(x)
+
+        # Normalize features and weights
+        x_norm = F.normalize(x)
+        w_norm = F.normalize(self.weight)
+
+        # Compute cosine similarity to all sub-centers
+        # Resulting shape: [B, out_neurons * K]
+        cosine = F.linear(x_norm, w_norm)
+
+        # Reshape to group sub-centers for each class
+        # Shape: [B, out_neurons, K]
+        cosine = cosine.view(-1, self.out_neurons, self.K)
+
+        # Find the hardest positive (closest sub-center) for each class
+        # Shape: [B, out_neurons]
+        max_cosine_over_k, _ = torch.max(cosine, dim=2)
+
+        return max_cosine_over_k
