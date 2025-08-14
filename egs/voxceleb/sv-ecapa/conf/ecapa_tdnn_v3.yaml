@@ -25,7 +25,7 @@ save_epoch_freq: 10         # Save checkpoint every N epochs
 log_batch_freq: 100         # Log training statistics every N batches
 
 # Audio processing parameters
-chunkify: True              # Whether to segment audio into chunks
+chunkify: True             # Whether to segment audio into chunks
 chunk_length: 3.0           # Duration (seconds) for each training sample
 sample_rate: 16000          # Audio sample rate in Hz
 aug_prob: 0.8               # Probability of applying augmentation
@@ -172,6 +172,14 @@ optimizer:
     nesterov: True
     weight_decay: 0.0001
 
+# optimizer:
+#   obj: torch.optim.AdamW
+#   args:
+#     params:                 # Will be populated with model parameters
+#     lr: <lr>
+#     betas: [0.9, 0.999]
+#     weight_decay: !!float 2e-5
+
 # Learning rate scheduler
 lr_scheduler:
   obj: vibe.schedulers.lr_scheduler.WarmupCosineScheduler
@@ -182,6 +190,17 @@ lr_scheduler:
     warmup_epoch: 5
     fix_epoch: <num_epochs>
     step_per_epoch:         # Will be set based on dataset size
+
+# lr_scheduler:
+#   obj: vibe.schedulers.lr_scheduler.CyclicLRScheduler
+#   args:
+#     optimizer: <optimizer>
+#     base_lr: <min_lr>
+#     max_lr: <lr>
+#     fix_epoch: <num_epochs>
+#     mode: triangular2
+#     num_cycles: 4
+#     step_per_epoch:         # Will be set based on dataset size
 
 # Loss function
 loss:
