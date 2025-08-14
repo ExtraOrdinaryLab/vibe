@@ -1,3 +1,3 @@
 # https://github.com/zyzisyz/mfa_conformer
 
-from .modeling_conformer import Conformer
+from .mfa_conformer import Conformer
