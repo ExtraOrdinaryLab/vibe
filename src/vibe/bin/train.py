@@ -23,6 +23,7 @@ from vibe.utils import (
     AverageMeters,
     ProgressMeter
 )
+from vibe.models.utils import convert_sync_batchnorm, revert_sync_batchnorm
 
 
 def accuracy(inputs: torch.Tensor, targets: torch.Tensor):
@@ -336,6 +337,11 @@ def main():
     classifier = build('classifier', config)
     model = nn.Sequential(embedding_model, classifier)
     model = model.to('cuda')
+
+    # Convert BatchNorm to SyncBatchNorm in distributed mode
+    if is_distributed and rank == 0:
+        model = convert_sync_batchnorm(model)
+        logger.info("Converted BatchNorm to SyncBatchNorm for distributed training")
     
     # Wrap model with DDP only in distributed mode
     if is_distributed:
@@ -441,6 +447,18 @@ def main():
         # Synchronize processes in distributed mode only
         if is_distributed:
             torch_dist.barrier(device_ids=[gpu])
+
+    if is_distributed and rank == 0:
+        # Get model without DDP wrapper
+        if isinstance(model, torch.nn.parallel.DistributedDataParallel):
+            model = model.module
+        
+        # Convert SyncBatchNorm back to regular BatchNorm
+        model = revert_sync_batchnorm(model)
+        logger.info("Reverted SyncBatchNorm to BatchNorm for final model saving")
+        
+        # Save the final model with regular BatchNorm
+        checkpointer.save_checkpoint(epoch=epoch)
 
     # Cleanup distributed training
     if is_distributed:
