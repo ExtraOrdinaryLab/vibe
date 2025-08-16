@@ -6,50 +6,6 @@ from torch import nn
 from torch.nn import functional as F
 
 
-class InputNormalization(torch.nn.Module):
-    """Performs sentence-level mean and variance normalization of the input tensor."""
-
-    def __init__(self, mean_norm=True, std_norm=True, eps=1e-10):
-        super().__init__()
-        self.mean_norm = mean_norm
-        self.std_norm = std_norm
-        self.eps = eps
-
-    def forward(self, x: torch.Tensor, lengths: torch.Tensor):
-        """Apply sentence-level normalization.
-
-        Arguments
-        ---------
-        x : torch.Tensor
-            A batch of input tensors with shape [batch, time, feat_dim].
-        lengths : torch.Tensor
-            A tensor containing the relative length of each sentence.
-
-        Returns
-        -------
-        x : torch.Tensor
-            The normalized tensor.
-        """
-        N_batches = x.shape[0]
-        out = torch.empty_like(x)
-
-        for snt_id in range(N_batches):
-            actual_size = torch.round(lengths[snt_id] * x.shape[1]).int()
-            x_snt = x[snt_id, 0:actual_size]
-
-            mean, std = self._compute_current_stats(x_snt)
-            out[snt_id] = (x[snt_id] - mean) / std
-
-        return out
-
-    def _compute_current_stats(self, x):
-        """Compute mean and std for a single sentence."""
-        mean = torch.mean(x, dim=0) if self.mean_norm else torch.tensor([0.0], device=x.device)
-        std = torch.std(x, dim=0) if self.std_norm else torch.tensor([1.0], device=x.device)
-        std = torch.max(std, self.eps * torch.ones_like(std))  # numerical stability
-        return mean.detach(), std.detach()
-
-
 def get_padding_elem(L_in: int, stride: int, kernel_size: int, dilation: int):
     """This function computes the number of elements to add for zero-padding.
 
