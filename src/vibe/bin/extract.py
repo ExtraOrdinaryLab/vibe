@@ -177,7 +177,6 @@ def main():
                 # Get audio file path and load it
                 wav_path = data[key]
                 wav, sample_rate = torchaudio.load(wav_path)
-                # wav = wav[:, :100*sample_rate]
                 
                 # Verify sample rate matches expected rate
                 assert sample_rate == config.sample_rate, (
