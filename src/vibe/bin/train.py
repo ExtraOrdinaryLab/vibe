@@ -339,7 +339,7 @@ def main():
     model = model.to('cuda')
 
     # Convert BatchNorm to SyncBatchNorm in distributed mode
-    if is_distributed and rank == 0:
+    if is_distributed:
         model = convert_sync_batchnorm(model)
         logger.info("Converted BatchNorm to SyncBatchNorm for distributed training")
     
