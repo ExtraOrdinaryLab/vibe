@@ -9,7 +9,7 @@ import logging
 import pathlib
 import warnings
 import collections
-from typing import Dict, Any, Optional, Union
+from typing import Dict, Any, Optional, Union, List
 
 import yaml
 import torch
@@ -34,6 +34,19 @@ def ckpt_recency(ckpt) -> float:
     return ckpt.meta["unixtime"]
 
 
+def ckpt_epoch(ckpt) -> int:
+    """
+    Helper function to get checkpoint epoch.
+    
+    Args:
+        ckpt: A Checkpoint namedtuple containing metadata
+    
+    Returns:
+        int: Epoch number of the checkpoint, or -1 if not found
+    """
+    return ckpt.meta.get("epoch", -1)
+
+
 # Define Checkpoint structure as a namedtuple for efficient storage
 Checkpoint = collections.namedtuple(
     "Checkpoint", ["path", "meta", "paramfiles"]
@@ -51,6 +64,7 @@ class Checkpointer:
     - Load model states from disk
     - Automatically manage checkpoint versioning
     - Support custom checkpoint naming
+    - Support weight averaging of model checkpoints
     """
     
     def __init__(
@@ -222,6 +236,125 @@ class Checkpointer:
                 raise RuntimeError(MSG)
                 
         logger.info(f"Saved checkpoint in {ckpt_dir}")
+
+    def get_checkpoints_in_range(
+        self, 
+        start_epoch: int, 
+        end_epoch: int
+    ) -> List[Checkpoint]:
+        """
+        Get all checkpoints within the specified epoch range.
+        
+        Args:
+            start_epoch: Starting epoch (inclusive)
+            end_epoch: Ending epoch (inclusive)
+            
+        Returns:
+            List of Checkpoint objects within the specified range
+        """
+        checkpoints = []
+        for ckpt_dir in self._list_checkpoint_dirs():
+            with open(ckpt_dir / META_FILENAME) as fi:
+                meta = yaml.load(fi, Loader=yaml.Loader)
+                
+            # Check if checkpoint is within epoch range
+            if 'epoch' in meta and start_epoch <= meta['epoch'] <= end_epoch:
+                paramfiles = {}
+                for ckptfile in ckpt_dir.iterdir():
+                    if ckptfile.suffix == CHECKPOINT_EXT:
+                        paramfiles[ckptfile.stem] = ckptfile
+                checkpoints.append(Checkpoint(ckpt_dir, meta, paramfiles))
+                
+        # Sort by epoch
+        checkpoints.sort(key=ckpt_epoch)
+        return checkpoints
+
+    def average_checkpoints(
+        self, 
+        start_epoch: int, 
+        end_epoch: int, 
+        device: str = "cuda",
+        save_name: str = "weight_averaged"
+    ) -> bool:
+        """
+        Average model weights from checkpoints in the specified epoch range.
+        
+        Args:
+            start_epoch: Starting epoch (inclusive)
+            end_epoch: Ending epoch (inclusive)
+            device: Device to load checkpoints to
+            save_name: Name for the saved averaged checkpoint
+            
+        Returns:
+            bool: True if averaging was successful, False otherwise
+        """
+        checkpoints = self.get_checkpoints_in_range(start_epoch, end_epoch)
+        
+        if not checkpoints:
+            logger.warning(f"No checkpoints found in range {start_epoch}-{end_epoch}")
+            return False
+            
+        logger.info(f"Averaging {len(checkpoints)} checkpoints from epochs {start_epoch} to {end_epoch}")
+        
+        # Initialize averaged state dictionaries for each recoverable
+        averaged_states = {}
+        for name in self.recoverables:
+            for ckpt in checkpoints:
+                if name in ckpt.paramfiles:
+                    # Load state dict from first checkpoint for this recoverable
+                    state = torch.load(ckpt.paramfiles[name], map_location=device)
+                    averaged_states[name] = state
+                    break
+                    
+            if name not in averaged_states:
+                logger.warning(f"Could not find checkpoint for {name} to initialize averaging")
+                continue
+        
+        # Accumulate state dicts from remaining checkpoints
+        for ckpt in checkpoints[1:]:
+            for name in averaged_states:
+                if name in ckpt.paramfiles:
+                    state = torch.load(ckpt.paramfiles[name], map_location=device)
+                    for key in averaged_states[name]:
+                        if key in state:
+                            averaged_states[name][key] += state[key]
+        
+        # Compute average by dividing by number of checkpoints
+        for name in averaged_states:
+            for key in averaged_states[name]:
+                averaged_states[name][key] /= len(checkpoints)
+        
+        # Create directory for averaged checkpoint
+        ckpt_dir = self._custom_checkpoint_dirpath(save_name)
+        os.makedirs(ckpt_dir, exist_ok=True)
+        
+        # Save metadata
+        meta = {
+            "unixtime": time.time(),
+            "averaged_epochs": {
+                "start": start_epoch,
+                "end": end_epoch,
+                "count": len(checkpoints)
+            }
+        }
+        self._save_checkpoint_metafile(ckpt_dir / META_FILENAME, meta)
+        
+        # Save averaged state dicts
+        for name, state in averaged_states.items():
+            save_path = ckpt_dir / f"{name}{CHECKPOINT_EXT}"
+            torch.save(state, save_path)
+            logger.info(f"Saved averaged {name} to {save_path}")
+            
+            # Load the averaged state into the recoverable
+            if name in self.recoverables:
+                obj = self.recoverables[name]
+                if isinstance(obj, torch.nn.Module):
+                    obj.load_state_dict(state)
+                elif hasattr(obj, 'load_state_dict'):
+                    obj.load_state_dict(state)
+        
+        logger.info(f"Weight averaging complete. Saved to {ckpt_dir}")
+        return True
 
     def _new_checkpoint_dirpath(self, epoch: Optional[int] = None) -> pathlib.Path:
         """
