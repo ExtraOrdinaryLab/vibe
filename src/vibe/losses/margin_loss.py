@@ -18,6 +18,7 @@ class ArcMarginLoss(nn.Module):
         margin (float): The angular margin penalty in radians.
         easy_margin (bool): If True, use a simplified version for better convergence.
         pythagorean_identity (bool): If True, use Pythagorean identity to calculate phi.
+        pos_squash_k (int): Insert a monotone squashing transformation only on the positive branch.
     
     References:
         ArcFace: Additive Angular Margin Loss for Deep Face Recognition
@@ -28,12 +29,14 @@ class ArcMarginLoss(nn.Module):
         scale: float = 30.0,
         margin: float = 0.2,
         easy_margin: bool = False, 
-        pythagorean_identity: bool = False
+        pythagorean_identity: bool = False, 
+        pos_squash_k: int = 1
     ) -> None:
         super(ArcMarginLoss, self).__init__()
         self.scale = scale
         self.easy_margin = easy_margin
         self.pythagorean_identity = pythagorean_identity
+        self.pos_squash_k = pos_squash_k
         self.criterion = nn.CrossEntropyLoss()
 
         self.update(margin)
@@ -49,6 +52,14 @@ class ArcMarginLoss(nn.Module):
         Returns:
             The computed loss value
         """
+        # NEW: squash the positive cosine before margin
+        if self.pos_squash_k > 1:
+            cosine_y = cosine[torch.arange(cosine.size(0)), label]
+            cosine_y = 1.0 - (1.0 - cosine_y).pow(self.pos_squash_k)
+            # replace the original positives with this sharper version
+            cosine = cosine.clone()
+            cosine[torch.arange(cosine.size(0)), label] = cosine_y
+
         if self.pythagorean_identity:
             # Calculate sine values using the Pythagorean identity
             sine = torch.sqrt(1.0 - torch.pow(cosine, 2))
@@ -97,8 +108,8 @@ class ArcMarginLoss(nn.Module):
 
 class ArcFaceLoss(ArcMarginLoss):
 
-    def __init__(self, scale = 30, margin = 0.2, easy_margin = False, pythagorean_identity = False):
-        super().__init__(scale, margin, easy_margin, pythagorean_identity)
+    def __init__(self, scale = 30, margin = 0.2, easy_margin = False, pythagorean_identity = False, pos_squash_k = 1):
+        super().__init__(scale, margin, easy_margin, pythagorean_identity, pos_squash_k)
 
 
 class AddMarginLoss(nn.Module):
