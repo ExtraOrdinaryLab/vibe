@@ -118,7 +118,8 @@ class ChebyshevArcMarginLoss(nn.Module):
         margin: float = 0.2,
         easy_margin: bool = False,
         chebyshev_degree: int = 30,
-        num_samples: int = 1000
+        num_samples: int = 1000, 
+        pos_squash_k: int = 1
     ) -> None:
         super(ChebyshevArcMarginLoss, self).__init__()
         self.scale = scale
@@ -127,6 +128,7 @@ class ChebyshevArcMarginLoss(nn.Module):
         self.eps = 1e-7
         self.chebyshev_degree = chebyshev_degree
         self.num_samples = num_samples
+        self.pos_squash_k = pos_squash_k
         
         self.update(margin)
 
@@ -141,9 +143,13 @@ class ChebyshevArcMarginLoss(nn.Module):
         Returns:
             The computed loss value
         """
-        # Ensure numerical stability
-        cosine = cosine.float()
-        cosine = torch.clamp(cosine, -1 + self.eps, 1 - self.eps)
+        # NEW: squash the positive cosine before margin
+        if self.pos_squash_k > 1:
+            cosine_y = cosine[torch.arange(cosine.size(0)), label]
+            cosine_y = 1.0 - (1.0 - cosine_y).pow(self.pos_squash_k)
+            # replace the original positives with this sharper version
+            cosine = cosine.clone()
+            cosine[torch.arange(cosine.size(0)), label] = cosine_y
         
         # Compute cos(arccos(cosine) + margin) using Chebyshev approximation
         phi = self.chebyshev_eval(cosine)
