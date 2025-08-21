@@ -113,7 +113,7 @@ def train(
         with torch.no_grad():
             # Get cosine values for the correct classes only
             batch_size = y.size(0)
-            correct_class_cos = output[torch.arange(batch_size), y].mean().item()
+            correct_class_logit = output[torch.arange(batch_size), y].mean().item()
 
         # Backward pass and optimization
         optimizer.zero_grad()
@@ -135,7 +135,7 @@ def train(
         train_stats.update('learning_rate', optimizer.param_groups[0]["lr"])
         train_stats.update('margin', margin_scheduler.get_margin())
         train_stats.update('grad_norm', total_norm)
-        train_stats.update('target_logit', correct_class_cos)
+        train_stats.update('target_logit', correct_class_logit)
         train_stats.update('time', time.time() - end)
 
         # Log progress at specified frequency
