@@ -107,6 +107,7 @@ class ChebyshevArcMarginLoss(nn.Module):
         easy_margin (bool): If True, use a simplified version for better convergence.
         chebyshev_degree (int): Degree of Chebyshev polynomial. Higher degrees provide better approximation.
         num_samples (int): Number of samples to compute Chebyshev coefficients.
+        pos_squash_k (float): Insert a monotone squashing transformation only on the positive branch.
     
     References:
         ArcFace: Additive Angular Margin Loss for Deep Face Recognition
@@ -119,7 +120,7 @@ class ChebyshevArcMarginLoss(nn.Module):
         easy_margin: bool = False,
         chebyshev_degree: int = 30,
         num_samples: int = 1000, 
-        pos_squash_k: int = 1
+        pos_squash_k: float = 1
     ) -> None:
         super(ChebyshevArcMarginLoss, self).__init__()
         self.scale = scale

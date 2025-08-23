@@ -30,7 +30,7 @@ class ArcMarginLoss(nn.Module):
         margin: float = 0.2,
         easy_margin: bool = False, 
         pythagorean_identity: bool = False, 
-        pos_squash_k: int = 1
+        pos_squash_k: float = 1
     ) -> None:
         super(ArcMarginLoss, self).__init__()
         self.scale = scale
