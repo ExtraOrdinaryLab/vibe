@@ -5,6 +5,7 @@ VIBE (Voice-Invariant Biometric Embedding) is a research codebase for speaker ve
 This repository currently contains the implementation for ChebyAAM, a stable angular margin loss based on Chebyshev polynomial approximation. The work is accepted by **ICASSP 2026**:
 
 > **The Achilles' Heel of Angular Margins: A Chebyshev Polynomial Fix for Speaker Verification**
+> 
 > Yang Wang, Yiqi Liu, Chenghao Xiao, Chenghua Lin
 > [[arXiv](https://www.arxiv.org/pdf/2601.13198)]
 
