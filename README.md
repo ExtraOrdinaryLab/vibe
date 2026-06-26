@@ -20,13 +20,13 @@ If you find this work useful, please cite:
 
 ```bibtex
 @misc{wang2026achillesheelangularmargins,
-      title={The Achilles' Heel of Angular Margins: A Chebyshev Polynomial Fix for Speaker Verification}, 
-      author={Yang Wang and Yiqi Liu and Chenghao Xiao and Chenghua Lin},
-      year={2026},
-      eprint={2601.13198},
-      archivePrefix={arXiv},
-      primaryClass={cs.SD},
-      url={https://arxiv.org/abs/2601.13198}, 
+  title={The Achilles' Heel of Angular Margins: A Chebyshev Polynomial Fix for Speaker Verification}, 
+  author={Yang Wang and Yiqi Liu and Chenghao Xiao and Chenghua Lin},
+  year={2026},
+  eprint={2601.13198},
+  archivePrefix={arXiv},
+  primaryClass={cs.SD},
+  url={https://arxiv.org/abs/2601.13198}, 
 }
 
 @inproceedings{wang2026chebyshev,
