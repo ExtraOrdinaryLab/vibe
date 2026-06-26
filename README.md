@@ -28,4 +28,13 @@ If you find this work useful, please cite:
       primaryClass={cs.SD},
       url={https://arxiv.org/abs/2601.13198}, 
 }
+
+@inproceedings{wang2026chebyshev,
+  author={Wang, Yang and Liu, Yiqi and Xiao, Chenghao and Lin, Chenghua},
+  booktitle={ICASSP 2026 - 2026 IEEE International Conference on Acoustics, Speech and Signal Processing (ICASSP)}, 
+  title={The Achilles’ Heel of Angular Margins: A Chebyshev Polynomial Fix for Speaker Verification}, 
+  year={2026},
+  pages={19037-19041},
+  doi={10.1109/ICASSP55912.2026.11463042}
+}
 ```
